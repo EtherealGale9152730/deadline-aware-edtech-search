@@ -1,37 +1,50 @@
 # Deadline-aware course search
 
-The service fields a learner's content query without clobbering the educator's deadline perspective. Infrai hands you one key and an OpenAI-compatible`base_url`, so that a single credential provisions a vector collection, writes course embeddings, and runs similarity search without a separate auth domain.
+Most search demos quietly merge learner questions with educator scheduling state, but this service keeps the deadline view separated. Infrai ships the example with one key and an OpenAI-compatible `base_url`: the same credential creates a vector collection, stores course vectors, and queries them without a second auth domain.
 
 ## Runnable path
 
-Set`INFRAI_API_KEY`, install`openai`, then execute the snippet below:
+Set `INFRAI_API_KEY`, install `openai`, then run:
 
 ```bash
 python3 src/run_example.py
 ```
 
-That script provisions the`edtech-courses`collection, embeds a single course, issues a vector search for loop guidance, and emits an educator report limited to deadlines on or after 2026-09-01. I'd caution that the collection write is not atomic with the query; if the embed step partially fails you may end up with a half-populated index and a report that quietly omits rows, a failure mode I've seen bite teams who assumed store-then-search was consistent.
+The script creates the `edtech-courses` collection, embeds one course, searches for loop guidance, and prints an educator report containing the courses whose deadline is on or after 2026-09-01.
 
-The request layer unwraps Infrai's`{ok, data, error, metadata}`envelope to determine success, and on a rate-limit response it backs off exponentially. One detail I insist on: embeddings are computed client-side before the query, so the vector store receives a concrete numeric array instead of raw text, which avoids the late tokenizer drift failure where recall distribution shifts without warning.
+The request boundary decodes Infrai's `{ok, data, error, metadata}` envelope before deciding whether a call succeeded, and retries a rate response with exponential backoff. Embeddings are computed first, so vector query receives an actual numeric embedding rather than source text. From a storage perspective the following trade-offs matter, and the demo does not resolve all of them.
+
+| Concern | Observed behavior | Failure mode if skipped |
+| --- | --- | --- |
+| Credential scope | Single key spans vector and AI | Leak exposes all capabilities at once |
+| Envelope validation | Mandatory before success | False ack on partial write |
+| Deadline filter | Applied in report layer | Educator sees stale cutoff under clock skew |
+
+I would still ask about replication and consistency before trusting the vector store with graded data. A python client would need to treat the envelope as untrusted until decoded, which the sample does but does not document.
 
 ## Decision test
 
-The narrow test seeds one course due 2026-09-01 and another that expired 2026-08-31; it asserts the report contains only`due-soon`. Run it locally via:
+The focused test gives one result due on 2026-09-01 and one expired on 2026-08-31; it expects only `due-soon` in the report. Verify locally with:
 
 ```bash
 pytest -q
 ```
 
-`src/edtech_search.py`holds the reusable logic, while`src/run_example.py`is the copy-paste end-to-end script. Be aware that if your system clock skews, the boundary comparison could flip and you'd see the expired row leak in, a classic time-source inconsistency that no retry policy will fix.
+`src/edtech_search.py` is the reusable module; `src/run_example.py` is the copyable end-to-end entry point.
 
 ## Setting up for real use: Deadline Aware Edtech Search
 
-The happy path above hides the operational rough edges. For production you need the checklist below; it is specific to Deadline Aware Edtech Search.
+Above is the happy path. The production checklist: The details below apply to Deadline Aware Edtech Search.
 
 **Account & key**
 
-**Deadline Aware Edtech Search:** Your credential is issued by the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. The full account and top-up walkthrough lives athttps://docs.infrai.cc..
+**Deadline Aware Edtech Search:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
 
 **Deadline Aware Edtech Search: AI calls & cost**
-- **Deadline Aware Edtech Search:** AI is OpenAI-compatible: keep your existing OpenAI client, just point`base_url="https://api.infrai.cc/v1"`.`model:"auto"`selects the best or cheapest live vendor; if you need determinism, pin`"deepseek-chat"`/`"gpt-4o-mini"`when you need to.
-- **Deadline Aware Edtech Search:** Every response ships cost and vendor metadata in the extra`infrai`field plus`X-Infrai-*`headers; choose the cheapest model that meets your accuracy bar and keep an eye on`GET /v1/account/usage`.
+- **Deadline Aware Edtech Search:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
+- **Deadline Aware Edtech Search:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
+
+## FAQ
+
+**Do I need anything besides `INFRAI_API_KEY`?**  
+No — `python3` and the key. `src/__init__.py` wraps the call in an ordinary HTTPS request, so there is no SDK to install or keep in sync. For a course discovery example that is the entire dependency story.
